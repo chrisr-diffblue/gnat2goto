@@ -188,7 +188,7 @@ for filename in $(find ${project_root} -name "*.${body_ext}" | LC_ALL=posix sort
 
    if [ "$result" -gt 0 ]; then
       compile_error_occured=1
-      status "  [COMPILE ERROR]"
+      status "  [COMPILE ERROR][EXIT CODE: $result]"
    else
       status "  [OK]"
    fi
