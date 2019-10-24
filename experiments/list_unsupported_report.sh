@@ -1,0 +1,244 @@
+#!/bin/sh
+
+# Usage info
+usage()
+{
+   if [ -n "$*" ]; then
+      echo "Error: $*"
+      echo
+   fi
+
+   # FIXME: UPDATE THIS USAGE info
+
+   echo "Usage:list_unsupported.sh [--help] [--apex] [--adc pragmas.adc] path_to_ada_source_folder"
+   echo
+   echo "Run GNAT2Goto on an Ada repository."
+   echo
+   echo "The output is an ordered list of currently unsupported features"
+   echo "with the number of times they occur in the input repository."
+   echo
+   echo "Options:"
+   echo "  --help             Display this usage information"
+   echo "  --apex             Use Rational APEX style naming convention .1.ada and .2.ada"
+   echo "  --adc pragmas.adc  Use the specified 'pragmas.adc' file during compilation"
+}
+
+# Display a status message from this script
+status()
+{
+   echo "[list_unsupported_report.sh] $*"
+}
+
+# File extensions to expect for Specification files and Body files
+spec_ext="${SPEC_EXT:-ads}"
+body_ext="${BODY_EXT:-adb}"
+
+# First check some environment prerequisites
+status "Checking environment..."
+# Can we build the support tool?
+# Problem: GNAT 2016 helpfully installs a g++ binary alongside gnat... except
+# it's way out of date so invoking g++ via PATH looking will pickup that gnat g++
+# compiler, rather than the default system compiler... Instead we need to
+# temporarily drop the GNAT tools off the path while we build the tool.
+ADA_HOME=`command -v gnat`
+ADA_HOME=$(cd "$(dirname ${ADA_HOME})/.." 2>/dev/null && pwd)
+export PATH=$(echo ${PATH} | tr ':' '\n' | grep -v "${ADA_HOME}" | paste -s -d : - )
+experiment_dir=`dirname "$0"`
+gplusplus=`command -v g++`
+if ! ${gplusplus} --std=c++14 "${experiment_dir}/collect_unsupported.cpp" -o CollectUnsupported ; then
+   status "Failed to compile support tool 'CollectUnsupported' using ${gplusplus}"
+   status "You need a version of g++ on the PATH that supports C++14"
+   exit 8
+fi
+
+status "...environment is OK."
+
+
+# Command line processing....
+
+if [ "$#" -eq 0 ]; then
+   usage
+   exit
+fi
+
+input_stdout=""
+input_stderr=""
+
+while [ -n "$1" ] ; do
+   case "$1" in
+      --apex)
+         spec_ext="1.ada"
+         body_ext="2.ada"
+         pragma_file="$(dirname ${0})/rational-apex.adc"
+         ;;
+      --adc)
+         shift
+         if [ -r "${1}" ] ; then
+            pragma_file="${1}"
+         else
+            usage "--adc option must specify a configuration pragma file"
+            exit 2
+         fi
+         ;;
+      --help)
+         usage
+         exit
+         ;;
+      --*)
+         usage
+         exit
+         ;;
+      *)
+         if [ -z "${input_stdout}" ]; then
+            input_stdout="$1"
+         elif [ -z "${input_stderr}" ]; then
+            input_stderr="$1"
+         else
+            usage "Only two input files may be specified"
+            exit
+         fi
+         ;;
+   esac
+   shift
+done
+
+# Finally start work
+
+# Collate the two input files for ease of processing
+raw_input_file="foo.tmp"
+cat "${input_stdout}" "${input_stderr}" > "${raw_input_file}"
+
+# Need to use ${spec_ext} and ${body_ext} inside some regex's here,
+# so add any quoting necessary
+quoted_spec_ext=$(printf "%s" "${spec_ext}" | sed 's/\./\\./g')
+quoted_body_ext=$(printf "%s" "${body_ext}" | sed 's/\./\\./g')
+# This redacting system is really pretty crude...
+sed '/^\[/ d' < "$raw_input_file" | \
+   sed 's/"[^"][^"]*"/"REDACTED"/g' | \
+      sed "s/[^ ][^ ]*\.${quoted_body_ext}/REDACTED.${body_ext}/g" | \
+         sed "s/[^ ][^ ]*\.${quoted_spec_ext}/REDACTED.${spec_ext}/g" \
+   > "${raw_input_file}_redacted"
+
+# Collate and summarise unsupported features
+LC_ALL=posix ./CollectUnsupported "$raw_input_file"
+
+# Collate and summarize compile errors from builds that did not generate
+# unsupported features lists
+
+# Find all the error messages, dropping the initial file name, column, and
+# line number, and any trailing "at filename:line" info, then sort and
+# collate them into descending counts of unique error messages.
+#
+# Finally, then output them in a form that looks similar to the output of the
+# CollectUnsupported program, like this:
+#
+# --------------------------------------------------------------------------------
+# Occurs: 3 times
+# Redacted compiler error message:
+# redacted error message
+# Raw compiler error message:
+# unredacted error message
+# --------------------------------------------------------------------------------
+#
+sed -n 's/^.*:[0-9]*:[0-9]*: error: //p' "$raw_input_file" | \
+   sed 's/ at [^ ][^ ]*:[0-9][0-9]*$//' | \
+      LC_ALL=posix sort | uniq -c | LC_ALL=posix sort -k1,1nr -k2 | \
+         awk '/^ *[0-9]+ .*$/ { \
+            count=$1; \
+            raw=$0; sub(/^ *[0-9]+ /, "", raw); \
+            redacted=raw; gsub(/"[^"]+"/, "\"REDACTED\"", redacted); \
+            print "--------------------------------------------------------------------------------"; \
+            print "Occurs:", count, "times"; \
+            print "Redacted compiler error message:"; \
+            print redacted; \
+            print "Raw compiler error message:"; \
+            print raw; \
+            print "--------------------------------------------------------------------------------"; \
+         }'
+
+# For GNAT BUG DETECTED
+awk  '/^\+===========================GNAT BUG DETECTED==============================\+/ { \
+         buf = $0; \
+      } \
+      /^\+==========================================================================\+/ { \
+         print buf "<<<>>>" $0; \
+      } \
+      /^\| Error detected at .*$/ { \
+         buf = buf "<<<>>>" "Error detected at REDACTED" \
+      } \
+      /^\| .*$/ { \
+         buf = buf "<<<>>>" $0 \
+      }' "$raw_input_file" \
+   | LC_ALL=posix sort | uniq -c | LC_ALL=posix sort -k1,1nr -k2 | \
+      awk '/^ *[0-9][0-9]* .*/ { \
+         print "--------------------------------------------------------------------------------"; \
+         print "Occurs:", $1, "times"; \
+         sub(/^ *[0-9][0-9]* */,"",$0); \
+         gsub(/<<<>>>/,"\n", $0); \
+         print $0; \
+         print "--------------------------------------------------------------------------------"; \
+      }'
+
+# For exceptions - note that we don't redact the file name here, because the filename/location
+# will be one of our own gnat2goto or gnat source files, not the users code.
+awk  '/^raised .*$/ { \
+         if (prev == "<========================>") \
+            print prev "<<<>>>" $0 "<<<>>>" ; \
+      } \
+      { \
+         prev = $0 \
+      }' "$raw_input_file" \
+   | LC_ALL=posix sort | uniq -c | LC_ALL=posix sort -k1,1nr -k2 | \
+      awk '/^ *[0-9][0-9]* .*/ { \
+         print "--------------------------------------------------------------------------------"; \
+         print "Occurs:", $1, "times"; \
+         sub(/^ *[0-9][0-9]* */,"",$0); \
+         gsub(/<<<>>>/,"\n", $0); \
+         print $0; \
+         print "--------------------------------------------------------------------------------"; \
+      }'
+
+# For any other kind of failure, we will have logged the exit code. To summarize
+# these cases, we convert the log output into a single line 'canonical form'
+# (replace newlines with '<<<>>>>') then we can sort and uniq the list, before
+# then turning the resulting list back into the same format as the report above.
+# Yes, it's ugly...
+# FIXME  - These regex will need updating for the new build script...
+awk  '/^---------- COMPILING: / { \
+         buf = ""; count=0; \
+      } \
+      /^gnat2goto exit code: [0-9]*/ { \
+         sub(/^.*---------- COMPILING: [^<]*<<<>>>/,"",buf); \
+         print buf "<<<>>>" $0; \
+      } \
+      { \
+         buf = buf "<<<>>>" $0 \
+      }' "$raw_input_file" \
+   | LC_ALL=posix sort | uniq -c | LC_ALL=posix sort -k1,1nr -k2 | \
+      awk '/^ *[0-9][0-9]* .*/ { \
+         print "--------------------------------------------------------------------------------"; \
+         print "Occurs:", $1, "times"; \
+         sub(/^ *[0-9][0-9]* */,"",$0); \
+         gsub(/<<<>>>/,"\n", $0); \
+         print $0; \
+         print "--------------------------------------------------------------------------------"; \
+      }'
+
+# Gather overall statistics
+# FIXME - These stats will need updating
+total_count=`grep -c -E '^---------- COMPILING: ' "$raw_input_file"`
+fail_count=`grep -c -E '^---------- FAILED ' "$raw_input_file"`
+non_compile_error_fail_count=`grep -c -E '^gnat2goto exit code: [0-9]*' "$raw_input_file"`
+missing_feature_count=`grep -c -E '^---------- MISSING FEATURES ' "$raw_input_file"`
+ok_count=`grep -c -E '^---------- OK ' "$raw_input_file"`
+
+# Final aggregate stats output
+
+status "--------------------------------------------------------"
+status "${total_count} files processed during feature collection."
+status "${fail_count} files failed to compile."
+status "${non_compile_error_fail_count} miscellaneous compiler failures."
+status "${missing_feature_count} files used features unsupported by gnat2goto."
+status "${ok_count} compiled successfully."
+status "See \"${raw_input_file}\" for details."
+status "-------------------------------------------------------"
