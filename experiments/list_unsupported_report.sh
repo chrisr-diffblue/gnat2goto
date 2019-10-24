@@ -223,22 +223,3 @@ awk  '/^---------- COMPILING: / { \
          print $0; \
          print "--------------------------------------------------------------------------------"; \
       }'
-
-# Gather overall statistics
-# FIXME - These stats will need updating
-total_count=`grep -c -E '^---------- COMPILING: ' "$raw_input_file"`
-fail_count=`grep -c -E '^---------- FAILED ' "$raw_input_file"`
-non_compile_error_fail_count=`grep -c -E '^gnat2goto exit code: [0-9]*' "$raw_input_file"`
-missing_feature_count=`grep -c -E '^---------- MISSING FEATURES ' "$raw_input_file"`
-ok_count=`grep -c -E '^---------- OK ' "$raw_input_file"`
-
-# Final aggregate stats output
-
-status "--------------------------------------------------------"
-status "${total_count} files processed during feature collection."
-status "${fail_count} files failed to compile."
-status "${non_compile_error_fail_count} miscellaneous compiler failures."
-status "${missing_feature_count} files used features unsupported by gnat2goto."
-status "${ok_count} compiled successfully."
-status "See \"${raw_input_file}\" for details."
-status "-------------------------------------------------------"
