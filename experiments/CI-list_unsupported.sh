@@ -75,7 +75,7 @@ test_repo()
 		)
 
 		echo "Gathering unsupported features..."
-		"${SCRIPT_DIR}/build.sh" "${CI_WORKING_DIR}/${repo_checkout_dir}" | tee "${CI_WORKING_DIR}/${repo_checkout_dir}-stdout" 2> "${CI_WORKING_DIR}/${repo_checkout_dir}-stderr"
+		"${SCRIPT_DIR}/build.sh" "${CI_WORKING_DIR}/${repo_checkout_dir}" > "${CI_WORKING_DIR}/${repo_checkout_dir}-stdout" 2> "${CI_WORKING_DIR}/${repo_checkout_dir}-stderr"
 		"${SCRIPT_DIR}/list_unsupported_report.sh" "${CI_WORKING_DIR}/${repo_checkout_dir}-stdout" "${CI_WORKING_DIR}/${repo_checkout_dir}-stderr"  | \
 			grep -A 3 'Occurs:' > "${CI_WORKING_DIR}/${repo_checkout_dir}-summary.txt"
 	)
